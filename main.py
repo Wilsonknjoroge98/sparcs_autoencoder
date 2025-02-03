@@ -298,21 +298,23 @@ class Baseline:
                 # shape (num_samples, sequence_length, num_features)
                 train_data = self.reshape_features(feature_arr)
 
-                # to what extent are feature arrays batched
-                sequence_length = 10
+                # # to what extent are feature arrays batched
+                # sequence_length = 10
 
-                # number of features in each component
-                num_features = 9
+                # # number of features in each component
+                # num_features = 9
 
-                latent_dim = 32
+                # latent_dim = 32
 
-                inputs = Input(shape=(sequence_length, num_features))
-                encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
-                decoded = RepeatVector(sequence_length)(encoded)
-                decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
+                # inputs = Input(shape=(sequence_length, num_features))
+                # encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
+                # decoded = RepeatVector(sequence_length)(encoded)
+                # decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
 
-                autoencoder = Model(inputs, decoded)
-                autoencoder.compile(optimizer='adam', loss='mse')
+                # autoencoder = Model(inputs, decoded)
+                # autoencoder.compile(optimizer='adam', loss='mse')
+
+                autoencoder = load_model('autoencoder.keras')
 
                 autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
 
@@ -320,7 +322,7 @@ class Baseline:
 
 if __name__ == "__main__":
         async def main():
-                baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=5000)
+                baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000)
                 await baseline.detect_anomalies()
 
         asyncio.run(main())
