@@ -1,14 +1,11 @@
 import asyncio
 import numpy as np
 import logging
-import math
 from tqdm import tqdm
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 from scipy.stats import skew, kurtosis
 from scipy.signal import welch, butter, filtfilt
-import tensorflow as tf
-from tensorflow import keras
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.layers import Input, Dense, LSTM, RepeatVector, TimeDistributed
 
@@ -104,7 +101,7 @@ class Baseline:
                 # use a sliding window with 50% overlap to create a 2D array of windows
                 windows = np.array([flattened_data[i:i+window_size] for i in range(0, len(flattened_data)-window_size, step_size)])
 
-                # reshape to (n_windows, 500000)
+                # reshape to (n_windows, 128000)
                 return windows.reshape(-1, 128000)
 
 
@@ -152,11 +149,11 @@ class Baseline:
                 
         async def send_sdr_command(self, command, value):
                 '''
-                https://k3xec.com/rtl-tcp/
-                send a request to the rtl_tcp server in order to adjust the settings of the remote device.
+                https://k3xec.com/rtl-tnp/
+                send a request to the rtl_tnp server in order to adjust the settings of the remote device.
 
                 :param command: A byte string denoted by b'' (e.g. b'0x01'). Each byte command maps to a unique definition.
-                :param value: np unsigned integer represents the argument for the command (e.g. the rtl-tcp set frequency '0x01' command would require a argument frequency)
+                :param value: np unsigned integer represents the argument for the command (e.g. the rtl-tnp set frequency '0x01' command would require a argument frequency)
                 '''
                 try:
                         command_message = command + int(value).to_bytes(4, byteorder='big')
@@ -212,6 +209,7 @@ class Baseline:
                                 raw_data = np.frombuffer(data, dtype=np.uint8)
                                 
                                 iq_samples.append(raw_data)
+                                print(len(iq_samples))
                 
                         self.stream.close()
                         await writer.wait_closed()
@@ -220,7 +218,7 @@ class Baseline:
                         error_message = f"Error while streaming from SDR: {str(e)}"
                         print(error_message)
         def get_reconstruction_error(self, data):
-                autoencoder = load_model('iq_autoencoder.keras')
+                autoencoder = load_model('autoencoder.keras')
 
                 reconstructed = autoencoder.predict(data)
                 return np.mean(np.abs(data - reconstructed), axis=(1, 2))
@@ -253,19 +251,13 @@ class Baseline:
                 # shape (num_samples, sequence_length, num_features)
                 train_data = self.reshape_features(feature_arr)
 
-                result = self.get_reconstruction_error(train_data)
+                errors = self.get_reconstruction_error(train_data)
 
-                logger.info(f'RESULT IS {result}')
+                print("Mean error:", np.mean(errors))
+                print("Standard deviation:", np.std(errors))
+                print("Max error:", np.max(errors))
+                print("Min error:", np.min(errors))
 
-                # print(f"Most frequent anomaly score: {most_frequent}")
-
-                # plt.figure(figsize=(10, 6))
-                # plt.hist(anomaly_scores, bins=50, edgecolor='black', alpha=0.7)
-                # plt.xlabel("Value")
-                # plt.ylabel("Anomaly Score")
-                # plt.title("Transmitting Intermittently")
-                # plt.grid(axis='y', linestyle='--', alpha=0.7)
-                # plt.show()
 
                 # Sliding Window Processing for Real-Time Anomaly Detection
                 window_size = 500000
@@ -305,7 +297,6 @@ class Baseline:
 
                 # shape (num_samples, sequence_length, num_features)
                 train_data = self.reshape_features(feature_arr)
-                logger.info(f'shape of train data: {train_data.shape}')
 
                 # to what extent are feature arrays batched
                 sequence_length = 10
@@ -325,14 +316,17 @@ class Baseline:
 
                 autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
 
-                autoencoder.save('iq_autoencoder.keras')
+                autoencoder.save('autoencoder.keras')
 
 if __name__ == "__main__":
         async def main():
-                baseline = Baseline(sdr_ip='192.168.3.157', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=50000)
+                baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=5000)
                 await baseline.detect_anomalies()
 
         asyncio.run(main())
+
+
+
 
 
 
