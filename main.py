@@ -2,6 +2,7 @@ import asyncio
 import numpy as np
 import logging
 from tqdm import tqdm
+import threading
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 from scipy.stats import skew, kurtosis
@@ -19,7 +20,7 @@ class Baseline:
             self.sdr_gain = sdr_gain
             self.num_samples = num_samples
             self.stream = None
-            self.queue = asyncio.Queue(maxsize=1000)
+            self.queue = asyncio.Queue(maxsize=1200)
         def _adjust_array_shapes(self, arr1: np.array, arr2: np.array) -> tuple[np.array]:
                 """
                 Adjust the shapes of two arrays to match, truncating longer arrays to match shorter array dimensions.
@@ -203,16 +204,20 @@ class Baseline:
 
                                 if len(data) != 1024:
                                         logger.warning(f"Received malformed sample of length: {len(data)}")
-                                        continue
+                                        continue 
 
                                 # interpret a buffer as a 1-dimensional array
                                 raw_data = np.frombuffer(data, dtype=np.uint8)
                                 
                                 iq_samples.append(raw_data)
+
+                                # if 
+                                #         self.queue.put_nowait(iq_samples)
+
                                 print(len(iq_samples))
                 
-                        self.stream.close()
-                        await writer.wait_closed()
+                        # self.stream.close()
+                        # await writer.wait_closed()
                         return iq_samples
                 except Exception as e:
                         error_message = f"Error while streaming from SDR: {str(e)}"
@@ -224,15 +229,15 @@ class Baseline:
                 return np.mean(np.abs(data - reconstructed), axis=(1, 2))
 
 
-        async def detect_anomalies(self):
-                iq_samples = await self.stream_samples()
+        async def detect_anomalies(self):                
+                # iq_samples = await self.stream_samples()
+                iq_samples = self.queue.get()
 
                 # shape (n_samples, 128000)
                 # 128000 is an arbitraty batch size number for processing
                 # each batch represents a collection of filtered IQ data
                 filtered_samples = self.filter_samples(iq_samples=iq_samples)
 
-                
                 logger.info("Extracting features from IQ samples")
 
                 feature_list = []
@@ -258,14 +263,16 @@ class Baseline:
                 print("Max error:", np.max(errors))
                 print("Min error:", np.min(errors))
 
+                if (np.mean(errors) > 100000):
+                        logger.warning('Anomolous Activity Detected!')
 
                 # Sliding Window Processing for Real-Time Anomaly Detection
-                window_size = 500000
-                step_size = 250000
-                anomalies = []
-                windows = np.array([iq_samples[i:i+window_size] for i in range(0, len(iq_samples)-window_size, step_size)])
-                
-                return anomalies
+                # window_size = 500000
+                # step_size = 250000
+                # anomalies = []
+                # windows = np.array([iq_samples[i:i+window_size] for i in range(0, len(iq_samples)-window_size, step_size)])
+                        
+                # return anomalies
         def reshape_features(self, features_arr: np.array):
                 num_full_chunks = features_arr.shape[0] // 10
 
@@ -322,9 +329,14 @@ class Baseline:
 
 if __name__ == "__main__":
         async def main():
-                baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000)
+                baseline = Baseline(sdr_ip='192.168.3.157', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=5000)
                 await baseline.detect_anomalies()
+                # await baseline.stream_samples()
 
+                t1 = threading.Thread(target=baseline.stream_samples())
+                t2 = threading.Thread(target=baseline.detect_anomalies())
+                
+                
         asyncio.run(main())
 
 
