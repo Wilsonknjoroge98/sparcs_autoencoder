@@ -22,7 +22,6 @@ class Baseline:
             self.sdr_gain = sdr_gain
             self.num_samples = num_samples
             self.stream = None
-            self.autoencoder =  load_model('autoencoder.keras')
         def _adjust_array_shapes(self, arr1: np.array, arr2: np.array) -> tuple[np.array]:
                 """
                 Adjust the shapes of two arrays to match, truncating longer arrays to match shorter array dimensions.
@@ -231,7 +230,8 @@ class Baseline:
                         error_message = f"Error while streaming from SDR: {str(e)}"
                         print(error_message)
         def get_reconstruction_error(self, data):
-                reconstructed = self.autoencoder.predict(data)
+                autoencoder = load_model('autoencoder.keras')
+                reconstructed = autoencoder.predict(data)
                 return np.mean(np.abs(data - reconstructed), axis=(1, 2))
 
 
@@ -267,17 +267,15 @@ class Baseline:
                 errors = self.get_reconstruction_error(train_data)
 
                 print('mean', np.mean(errors))
+                print('std', np.std(errors))
+                print('max', np.max(errors))
+                print('min', np.min(errors))
 
-                if (np.mean(errors) > 60000):
-                        threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
-                        threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
-                        threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
+                # if (np.mean(errors) > 60000):
+                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
+                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
+                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
 
-                # Sliding Window Processing for Real-Time Anomaly Detection
-                # window_size = 500000
-                # step_size = 250000
-                # anomalies = []
-                # windows = np.array([iq_samples[i:i+window_size] for i in range(0, len(iq_samples)-window_size, step_size)])
                         
                 # return anomalies
         # except asyncio.TimeoutError:
@@ -315,23 +313,23 @@ class Baseline:
                 # shape (num_samples, sequence_length, num_features)
                 train_data = self.reshape_features(feature_arr)
 
-                # # to what extent are feature arrays batched
-                # sequence_length = 10
+                # to what extent are feature arrays batched
+                sequence_length = 10
 
-                # # number of features in each component
-                # num_features = 9
+                # number of features in each component
+                num_features = 9
 
-                # latent_dim = 32
+                latent_dim = 32
 
-                # inputs = Input(shape=(sequence_length, num_features))
-                # encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
-                # decoded = RepeatVector(sequence_length)(encoded)
-                # decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
+                inputs = Input(shape=(sequence_length, num_features))
+                encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
+                decoded = RepeatVector(sequence_length)(encoded)
+                decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
 
-                # autoencoder = Model(inputs, decoded)
-                # autoencoder.compile(optimizer='adam', loss='mse')
+                autoencoder = Model(inputs, decoded)
+                autoencoder.compile(optimizer='adam', loss='mse')
 
-                autoencoder = load_model('autoencoder.keras')
+                # autoencoder = load_model('autoencoder.keras')
 
                 autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
 
