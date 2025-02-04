@@ -1,3 +1,5 @@
+from pydub import AudioSegment
+from pydub.playback import play
 import asyncio
 import numpy as np
 import logging
@@ -20,7 +22,7 @@ class Baseline:
             self.sdr_gain = sdr_gain
             self.num_samples = num_samples
             self.stream = None
-            self.queue = asyncio.Queue(maxsize=1200)
+            self.autoencoder =  load_model('autoencoder.keras')
         def _adjust_array_shapes(self, arr1: np.array, arr2: np.array) -> tuple[np.array]:
                 """
                 Adjust the shapes of two arrays to match, truncating longer arrays to match shorter array dimensions.
@@ -39,6 +41,9 @@ class Baseline:
                         arr2 = arr2[tuple(slice(0, s) for s in min_shape)] 
                 return arr1, arr2
         
+        def play_sound(self, sound_file):
+                sound = AudioSegment.from_file(sound_file)
+                play(sound)
 
         def filter_samples(self, iq_samples: np.array, center_freq=446000000, 
                         soi_start_freq=445000000, soi_end_freq=447000000, 
@@ -190,10 +195,12 @@ class Baseline:
                         # gain in tenths of a dB
                         await self.send_sdr_command(b'\x04', np.uint32(self.sdr_gain))
 
-                        iq_samples = []
+                      
         
                         logger.info("Starting to stream IQ samples")
                         await asyncio.sleep(2)
+                        # while not stop_event.is_set():
+                        iq_samples = []
                         while len(iq_samples) < self.num_samples:
                                 # read raw data from sdr up to 1024 bytes
                                 data = await reader.read(1024)
@@ -203,7 +210,7 @@ class Baseline:
                                         break
 
                                 if len(data) != 1024:
-                                        logger.warning(f"Received malformed sample of length: {len(data)}")
+                                        # logger.warning(f"Received malformed sample of length: {len(data)}")
                                         continue 
 
                                 # interpret a buffer as a 1-dimensional array
@@ -211,27 +218,28 @@ class Baseline:
                                 
                                 iq_samples.append(raw_data)
 
-                                # if 
-                                #         self.queue.put_nowait(iq_samples)
+                                # if len(iq_samples) == self.num_samples:
+                                        # await iq_queue.put(iq_samples)
+                                        # return iq_samples
 
                                 print(len(iq_samples))
-                
-                        # self.stream.close()
-                        # await writer.wait_closed()
+                        
+                        self.stream.close()
+                        await writer.wait_closed()
                         return iq_samples
                 except Exception as e:
                         error_message = f"Error while streaming from SDR: {str(e)}"
                         print(error_message)
         def get_reconstruction_error(self, data):
-                autoencoder = load_model('autoencoder.keras')
-
-                reconstructed = autoencoder.predict(data)
+                reconstructed = self.autoencoder.predict(data)
                 return np.mean(np.abs(data - reconstructed), axis=(1, 2))
 
 
-        async def detect_anomalies(self):                
-                # iq_samples = await self.stream_samples()
-                iq_samples = self.queue.get()
+        async def detect_anomalies(self):
+# while not stop_event.is_set():
+        # try:           
+                iq_samples = await self.stream_samples()
+                # iq_samples = await iq_queue.get()
 
                 # shape (n_samples, 128000)
                 # 128000 is an arbitraty batch size number for processing
@@ -258,13 +266,12 @@ class Baseline:
 
                 errors = self.get_reconstruction_error(train_data)
 
-                print("Mean error:", np.mean(errors))
-                print("Standard deviation:", np.std(errors))
-                print("Max error:", np.max(errors))
-                print("Min error:", np.min(errors))
+                print('mean', np.mean(errors))
 
-                if (np.mean(errors) > 100000):
-                        logger.warning('Anomolous Activity Detected!')
+                if (np.mean(errors) > 60000):
+                        threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
+                        threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
+                        threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
 
                 # Sliding Window Processing for Real-Time Anomaly Detection
                 # window_size = 500000
@@ -273,6 +280,9 @@ class Baseline:
                 # windows = np.array([iq_samples[i:i+window_size] for i in range(0, len(iq_samples)-window_size, step_size)])
                         
                 # return anomalies
+        # except asyncio.TimeoutError:
+                # continue
+                
         def reshape_features(self, features_arr: np.array):
                 num_full_chunks = features_arr.shape[0] // 10
 
@@ -329,12 +339,20 @@ class Baseline:
 
 if __name__ == "__main__":
         async def main():
-                baseline = Baseline(sdr_ip='192.168.3.157', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=5000)
+                baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000)
                 await baseline.detect_anomalies()
-                # await baseline.stream_samples()
+                # iq_queue = asyncio.Queue(maxsize=1000000) 
+                # stop_event = asyncio.Event()
 
-                t1 = threading.Thread(target=baseline.stream_samples())
-                t2 = threading.Thread(target=baseline.detect_anomalies())
+                # producer_thread = asyncio.create_task(baseline.stream_samples(iq_queue, stop_event))
+                # consumer_thread = asyncio.create_task(baseline.detect_anomalies(iq_queue, stop_event))
+
+
+                # await asyncio.sleep(5)
+
+                # stop_event.set()
+                # await producer_thread
+                # await consumer_thread
                 
                 
         asyncio.run(main())
