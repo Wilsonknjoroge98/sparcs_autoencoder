@@ -176,7 +176,7 @@ class Baseline:
                         error_message = f"Error in send_command: {str(e)}"
                         print(error_message)
 
-        async def stream_samples(self):
+        async def stream_samples(self, iq_queue, stop_event):
                 """
                 Open an SDR device from IP and port numbers. While a "streaming task" is active, collect IQ data
                 from raw uint8 data from the SDR data socket stream.
@@ -204,36 +204,31 @@ class Baseline:
         
                         logger.info("Starting to stream IQ samples")
                         await asyncio.sleep(2)
-                        # while not stop_event.is_set():
-                        iq_samples = []
-                        while len(iq_samples) < self.num_samples:
-                                # read raw data from sdr up to 1024 bytes
-                                data = await reader.read(1024)
+                        while not stop_event.is_set():
+                                iq_samples = []
+                                while len(iq_samples) < self.num_samples:
+                                        # read raw data from sdr up to 1024 bytes
+                                        data = await reader.read(1024)
 
-                                if not data:
-                                        logger.warning("No data received. Check device and try again.")
-                                        break
+                                        if not data:
+                                                logger.warning("No data received. Check device and try again.")
+                                                break
 
-                                if len(data) != 1024:
-                                        # logger.warning(f"Received malformed sample of length: {len(data)}")
-                                        continue 
+                                        if len(data) != 1024:
+                                                # logger.warning(f"Received malformed sample of length: {len(data)}")
+                                                continue 
 
-                                # interpret a buffer as a 1-dimensional array
-                                raw_data = np.frombuffer(data, dtype=np.uint8)
-                                
-                                iq_samples.append(raw_data)
+                                        # interpret a buffer as a 1-dimensional array
+                                        raw_data = np.frombuffer(data, dtype=np.uint8)
+                                        
+                                        iq_samples.append(raw_data)
 
-                                # print(iq_samples)
-
-                                # if len(iq_samples) == self.num_samples:
-                                        # await iq_queue.put(iq_samples)
-                                        # return iq_samples
-
-                                print(len(iq_samples))
+                                        if len(iq_samples) == self.num_samples:
+                                                await iq_queue.put_nowait(iq_samples)
                         
-                        self.stream.close()
-                        await writer.wait_closed()
-                        return iq_samples
+                        # self.stream.close()
+                        # await writer.wait_closed()
+                        # return iq_samples
                 except Exception as e:
                         error_message = f"Error while streaming from SDR: {str(e)}"
                         print(error_message)
@@ -243,57 +238,50 @@ class Baseline:
                 return np.mean(np.abs(data - reconstructed), axis=(1, 2))
 
 
-        async def detect_anomalies(self):
-# while not stop_event.is_set():
-        # try:           
-                iq_samples = await self.stream_samples()
+        async def detect_anomalies(self, iq_queue, stop_event):
+                while not stop_event.is_set():
+                        try:           
+                                # iq_samples = await self.stream_samples()
+                                iq_samples = await iq_queue.get()
 
-                for sample in np.array(iq_samples):
-                        print(np.max(sample))
-                # iq_samples = await iq_queue.get()
+                                # shape (n_samples, 128000)
+                                # 128000 is an arbitraty batch size number for processing
+                                # each batch represents a collection of filtered IQ data
+                                filtered_samples = self.filter_samples(iq_samples=iq_samples)
 
-                # shape (n_samples, 128000)
-                # 128000 is an arbitraty batch size number for processing
-                # each batch represents a collection of filtered IQ data
-                filtered_samples = self.filter_samples(iq_samples=iq_samples)
-                print(filtered_samples.shape)
-                print(filtered_samples[0])
+                                logger.info("Extracting features from IQ samples")
 
-                logger.info("Extracting features from IQ samples")
+                                feature_list = []
+                                # extract 9 features from each batch of filtered IQ data
+                                for filt_data in tqdm(filtered_samples): 
+                                        features = self.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
+                                        feature_list.append(features)
 
-                feature_list = []
-                # extract 9 features from each batch of filtered IQ data
-                for filt_data in tqdm(filtered_samples): 
-                        features = self.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
-                        feature_list.append(features)
-
-                # shape (-1, 9)
-                feature_arr = np.array(feature_list)
-                print('feature array shape', feature_arr.shape)
-                print(feature_arr[0])
+                                # shape (-1, 9)
+                                feature_arr = np.array(feature_list)
 
 
-                logger.info("Features extracted from IQ samples")
+                                logger.info("Features extracted from IQ samples")
 
-                # shape (num_samples, sequence_length, num_features)
-                train_data = self.reshape_features(feature_arr)
+                                # shape (num_samples, sequence_length, num_features)
+                                train_data = self.reshape_features(feature_arr)
 
-                errors = self.get_reconstruction_error(train_data)
+                                errors = self.get_reconstruction_error(train_data)
 
-                print('mean', np.mean(errors))
-                print('std', np.std(errors))
-                print('max', np.max(errors))
-                print('min', np.min(errors))
+                                print('mean', np.mean(errors))
+                                print('std', np.std(errors))
+                                print('max', np.max(errors))
+                                print('min', np.min(errors))
 
-                # if (np.mean(errors) > 60000):
-                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
-                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
-                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
+                                # if (np.mean(errors) > 60000):
+                                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
+                                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
+                                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
 
-                        
-                # return anomalies
-        # except asyncio.TimeoutError:
-                # continue
+                                
+                        # return anomalies
+                        except asyncio.TimeoutError:
+                                continue
                 
         def reshape_features(self, features_arr: np.array):
                 num_full_chunks = features_arr.shape[0] // 10
@@ -358,20 +346,25 @@ class Baseline:
 
 if __name__ == "__main__":
         async def main():
+<<<<<<< HEAD
                 baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000)
                 await baseline.train()
                 # iq_queue = asyncio.Queue(maxsize=1000000) 
                 # stop_event = asyncio.Event()
+=======
+                baseline = Baseline(sdr_ip='192.168.3.157', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=7500)
+                iq_queue = asyncio.Queue(maxsize=1000000) 
+                stop_event = asyncio.Event()
+>>>>>>> 35fa557ccd68d22e01250ee40f585389c1577730
 
-                # producer_thread = asyncio.create_task(baseline.stream_samples(iq_queue, stop_event))
-                # consumer_thread = asyncio.create_task(baseline.detect_anomalies(iq_queue, stop_event))
+                producer_thread = asyncio.create_task(baseline.stream_samples(iq_queue, stop_event))
+                consumer_thread = asyncio.create_task(baseline.detect_anomalies(iq_queue, stop_event))
 
+                await asyncio.sleep(30)
 
-                # await asyncio.sleep(5)
-
-                # stop_event.set()
-                # await producer_thread
-                # await consumer_thread
+                stop_event.set()
+                await producer_thread
+                await consumer_thread
                 
                 
         asyncio.run(main())
