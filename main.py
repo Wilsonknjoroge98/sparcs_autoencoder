@@ -1,5 +1,5 @@
-# from pydub import AudioSegment
-# from pydub.playback import play
+from pydub import AudioSegment
+from pydub.playback import play
 import asyncio
 import numpy as np
 import logging
@@ -14,8 +14,8 @@ from tensorflow.keras.layers import Input, Dense, LSTM, RepeatVector, TimeDistri
 from sklearn.preprocessing import MinMaxScaler
 
 class Utils:
-        def __init__(self):
-                pass
+        def __init__(self, autoencoder):
+                self.autoencoder = autoencoder
 
         async def filter_samples(self, iq_samples) -> np.array:
                         """
@@ -164,8 +164,7 @@ class Utils:
                         print(error_message)
 
         def get_reconstruction_error(self, data):
-                autoencoder = load_model('autoencoder.keras')
-                reconstructed = autoencoder.predict(data)
+                reconstructed = self.autoencoder.predict(data)
                 return np.mean(np.abs(data - reconstructed), axis=(1, 2))
         
         def reshape_features(self, features_arr: np.array):
@@ -234,7 +233,7 @@ class Utils:
 
 
 class Test:
-        def __init__(self, sdr_ip, sdr_port, sdr_freq, sdr_sample_rate, sdr_gain, num_samples):
+        def __init__(self, sdr_ip, sdr_port, sdr_freq, sdr_sample_rate, sdr_gain, num_samples, autoencoder):
                 self.sdr_ip = sdr_ip
                 self.sdr_port = sdr_port
                 self.sdr_freq = sdr_freq
@@ -242,7 +241,7 @@ class Test:
                 self.sdr_gain = sdr_gain
                 self.num_samples = num_samples
                 self.stream = None
-                self.utils = Utils()    
+                self.utils = Utils(autoencoder=autoencoder)    
         async def stream_samples(self):
                 """
                 Open an SDR device from IP and port numbers. While a "streaming task" is active, collect IQ data
@@ -332,7 +331,7 @@ class Test:
 
 
 class Detect:
-        def __init__(self, sdr_ip, sdr_port, sdr_freq, sdr_sample_rate, sdr_gain, num_samples):
+        def __init__(self, sdr_ip, sdr_port, sdr_freq, sdr_sample_rate, sdr_gain, num_samples, autoencoder):
             self.sdr_ip = sdr_ip
             self.sdr_port = sdr_port
             self.sdr_freq = sdr_freq
@@ -340,9 +339,10 @@ class Detect:
             self.sdr_gain = sdr_gain
             self.num_samples = num_samples
             self.stream = None
+            self.utils = Utils(autoencoder=autoencoder)
 
 
-        async def stream_samples(self, iq_queue, stop_event):
+        async def stream_samples(self, iq_queue: asyncio.Queue, stop_event):
                 """
                 Open an SDR device from IP and port numbers. While a "streaming task" is active, collect IQ data
                 from raw uint8 data from the SDR data socket stream.
@@ -357,18 +357,15 @@ class Detect:
                         reader, writer = await asyncio.open_connection(self.sdr_ip, self.sdr_port)
                         self.stream = writer
 
-                        utils = Utils()
                         # number of cycles per second measured in Hz
-                        await utils.send_sdr_command(self.stream, b'\x01', np.uint32(self.sdr_freq))
+                        await self.utils.send_sdr_command(self.stream, b'\x01', np.uint32(self.sdr_freq))
                         # number of samples read and imaginary per second (must be at least 2x frequency), this was f'd up
-                        await utils.send_sdr_command(self.stream, b'\x02', np.uint32(self.sdr_sample_rate))
+                        await self.utils.send_sdr_command(self.stream, b'\x02', np.uint32(self.sdr_sample_rate))
                         # manual gain control 
-                        await utils.send_sdr_command(self.stream, b'\x03', np.uint32(1))
+                        await self.utils.send_sdr_command(self.stream, b'\x03', np.uint32(1))
                         # gain in tenths of a dB
-                        await utils.send_sdr_command(self.stream, b'\x04', np.uint32(self.sdr_gain))
+                        await self.utils.send_sdr_command(self.stream, b'\x04', np.uint32(self.sdr_gain))
 
-                      
-        
                         logger.info("Starting to stream IQ samples")
                         await asyncio.sleep(2)
                         while not stop_event.is_set():
@@ -391,9 +388,8 @@ class Detect:
                                         iq_samples.append(raw_data)
 
                                         if len(iq_samples) == self.num_samples:
-                                                await iq_queue.put_nowait(iq_samples)
-                        self.stream.close()
-                        await writer.wait_closed()
+                                                await iq_queue.put(iq_samples)
+                                        print('queue size', iq_queue.qsize())
                 except Exception as e:
                         error_message = f"Error while streaming from SDR: {str(e)}"
                         print(error_message)
@@ -407,15 +403,15 @@ class Detect:
                                 # shape (n_samples, 128000)
                                 # 128000 is an arbitraty batch size number for processing
                                 # each batch represents a collection of filtered IQ data
-                                utils = Utils()
-                                filtered_samples = await utils.filter_samples(iq_samples=iq_samples)
+
+                                filtered_samples = await self.utils.filter_samples(iq_samples=iq_samples)
 
                                 logger.info("Extracting features from IQ samples")
 
                                 feature_list = []
                                 # extract 9 features from each batch of filtered IQ data
                                 for filt_data in tqdm(filtered_samples): 
-                                        features = utils.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
+                                        features = self.utils.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
                                         feature_list.append(features)
 
                                 # shape (-1, 9)
@@ -425,9 +421,9 @@ class Detect:
                                 logger.info("Features extracted from IQ samples")
 
                                 # shape (num_samples, sequence_length, num_features)
-                                train_data = utils.reshape_features(feature_arr)
+                                train_data = self.utils.reshape_features(feature_arr)
 
-                                errors = utils.get_reconstruction_error(train_data)
+                                errors = self.utils.get_reconstruction_error(train_data)
 
                                 print('mean', np.mean(errors))
                                 print('std', np.std(errors))
@@ -435,9 +431,9 @@ class Detect:
                                 print('min', np.min(errors))
 
                                 # if (np.mean(errors) > 60000):
-                                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
-                                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
-                                #         threading.Thread(target=self.play_sound, args=('beep.mp3',)).start()
+                                #         threading.Thread(target=self.utils.play_sound, args=('beep.mp3',)).start()
+                                #         threading.Thread(target=self.utils.play_sound, args=('beep.mp3',)).start()
+                                #         threading.Thread(target=self.utils.play_sound, args=('beep.mp3',)).start()
 
                                 
                         # return anomalies
@@ -448,19 +444,22 @@ class Detect:
 
 if __name__ == "__main__":
         async def main():
-                run_test = Test(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000)
-                await run_test.detect_anomalies()
-                # iq_queue = asyncio.Queue(maxsize=1000000) 
-                # stop_event = asyncio.Event()
+                autoencoder = load_model('autoencoder.keras')
 
-                # producer_thread = asyncio.create_task(baseline.stream_samples(iq_queue, stop_event))
-                # consumer_thread = asyncio.create_task(baseline.detect_anomalies(iq_queue, stop_event))
+                detect = Detect(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000, autoencoder=autoencoder)
+                iq_queue = asyncio.Queue(maxsize=100000) 
+                stop_event = asyncio.Event()
 
-                # await asyncio.sleep(30)
+                
 
-                # stop_event.set()
-                # await producer_thread
-                # await consumer_thread
+                producer_tasks = [asyncio.create_task(detect.stream_samples(iq_queue, stop_event)) for _ in range(3)]
+                consumer_tasks = [asyncio.create_task(detect.detect_anomalies(iq_queue, stop_event)) for _ in range(10)]
+                
+
+                await asyncio.sleep(120)
+
+                stop_event.set()
+                await asyncio.gather(*producer_tasks, *consumer_tasks)
                 
         asyncio.run(main())
 
