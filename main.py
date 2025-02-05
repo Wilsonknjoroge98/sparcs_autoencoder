@@ -11,6 +11,7 @@ from scipy.stats import skew, kurtosis
 from scipy.signal import welch, butter, filtfilt
 from tensorflow.keras.models import Model, load_model
 from tensorflow.keras.layers import Input, Dense, LSTM, RepeatVector, TimeDistributed
+from sklearn.preprocessing import MinMaxScaler
 
 
 class Baseline:
@@ -73,6 +74,7 @@ class Baseline:
 
                 logger.info("Filtering IQ samples")
                 for sample in tqdm(iq_samples):
+                        # print(sample)
                         # if (counter == 1):
                         #         print(f'Original {sample[0]}')
                         # remove dc offset i.e. center the signal (sample data type)
@@ -217,6 +219,8 @@ class Baseline:
                                 
                                 iq_samples.append(raw_data)
 
+                                # print(iq_samples)
+
                                 # if len(iq_samples) == self.num_samples:
                                         # await iq_queue.put(iq_samples)
                                         # return iq_samples
@@ -239,12 +243,17 @@ class Baseline:
 # while not stop_event.is_set():
         # try:           
                 iq_samples = await self.stream_samples()
+
+                for sample in np.array(iq_samples):
+                        print(np.max(sample))
                 # iq_samples = await iq_queue.get()
 
                 # shape (n_samples, 128000)
                 # 128000 is an arbitraty batch size number for processing
                 # each batch represents a collection of filtered IQ data
                 filtered_samples = self.filter_samples(iq_samples=iq_samples)
+                print(filtered_samples.shape)
+                print(filtered_samples[0])
 
                 logger.info("Extracting features from IQ samples")
 
@@ -256,8 +265,9 @@ class Baseline:
 
                 # shape (-1, 9)
                 feature_arr = np.array(feature_list)
-
+                print('feature array shape', feature_arr.shape)
                 print(feature_arr[0])
+
 
                 logger.info("Features extracted from IQ samples")
 
@@ -296,6 +306,7 @@ class Baseline:
                 # 128000 is an arbitraty batch size number for processing
                 # each batch represents a collection of filtered IQ data
                 filtered_samples = self.filter_samples(iq_samples=iq_samples)
+
                 
                 logger.info("Extracting features from IQ samples")
                 
@@ -308,28 +319,34 @@ class Baseline:
                 # shape (-1, 9)
                 feature_arr = np.array(feature_list)
 
+                scaler = MinMaxScaler()
+                scaled_feature_arr = scaler.fit_transform(feature_arr)
+
                 logger.info("Features extracted from IQ samples")
 
                 # shape (num_samples, sequence_length, num_features)
-                train_data = self.reshape_features(feature_arr)
+                train_data = self.reshape_features(scaled_feature_arr)
 
-                # to what extent are feature arrays batched
-                sequence_length = 10
 
-                # number of features in each component
-                num_features = 9
+                # print('train data shape', train_data.shape)
 
-                latent_dim = 32
+                # # to what extent are feature arrays batched
+                # sequence_length = 10
 
-                inputs = Input(shape=(sequence_length, num_features))
-                encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
-                decoded = RepeatVector(sequence_length)(encoded)
-                decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
+                # # number of features in each component
+                # num_features = 9
 
-                autoencoder = Model(inputs, decoded)
-                autoencoder.compile(optimizer='adam', loss='mse')
+                # latent_dim = 5
 
-                # autoencoder = load_model('autoencoder.keras')
+                # inputs = Input(shape=(sequence_length, num_features))
+                # encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
+                # decoded = RepeatVector(sequence_length)(encoded)
+                # decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
+
+                # autoencoder = Model(inputs, decoded)
+                # autoencoder.compile(optimizer='adam', loss='mse')
+
+                autoencoder = load_model('autoencoder.keras')
 
                 autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
 
@@ -337,8 +354,8 @@ class Baseline:
 
 if __name__ == "__main__":
         async def main():
-                baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000)
-                await baseline.detect_anomalies()
+                baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=500000)
+                await baseline.train()
                 # iq_queue = asyncio.Queue(maxsize=1000000) 
                 # stop_event = asyncio.Event()
 
