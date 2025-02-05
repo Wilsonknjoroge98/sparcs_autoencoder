@@ -67,7 +67,7 @@ class Baseline:
                 # how fast the SDR is sampling IQ data
                 sample_rate_hz = (soi_end_freq * 2) + 1
                 # set up filter coefficients for bandpass filter
-                b, a = butter(4, Wn=[445000000, 446999999], fs=sample_rate_hz, btype='bandpass')
+                # b, a = butter(4, Wn=[445000000, 446999999], fs=sample_rate_hz, btype='bandpass')
                 
                 processed_data = []
                 # loop through segments of iq samples
@@ -82,25 +82,29 @@ class Baseline:
                         # if (counter == 1):
                         #         print(f'Removed DC offset: {data[0]}')
                         # energy normalization
-                        data = data / np.sqrt(np.mean(np.abs(data)**2))
+                        # data = data / np.sqrt(np.mean(np.abs(data)**2))
                         # if (counter == 1):
                         #         print(f'Normalized energy: {data[0]}')
                         # array of sample timestamps
-                        t = np.arange(len(data)) / sample_rate_hz
-                        data, t = self._adjust_array_shapes(data, t)
+                        # t = np.arange(len(data)) / sample_rate_hz
+                        t = np.arange(len(data)) / 2048000
+                        # data, t = self._adjust_array_shapes(data, t)
                         # shift the signal frequency by frequency_shift_hz
                         shifted_data = data * np.exp(1j*2*np.pi*frequency_shift_hz*t)
                 
                         # if (counter == 1):
                         #         print(f'Shifted data: {shifted_data[0]}')
                         # filters out frequencies outside the spectrum of interest.
-                        filt_data = filtfilt(b, a, shifted_data)
+                        # filt_data = filtfilt(b, a, shifted_data)
                         # if (counter == 1):
                         #         print(f'Filtered data: {filt_data[0]}')
-                        processed_data.append(filt_data)
+
+                        processed_data.append(shifted_data)
                         # flattens signals into a single array
                         # counter += 1
                 flattened_data = np.hstack(processed_data)
+                print('flattened data shape', flattened_data.shape)
+                print('flattened data', flattened_data[:5])
 
                 window_size = 128000 
                 step_size = 64000 
@@ -305,7 +309,7 @@ class Baseline:
                 # shape (n_samples, 128000)
                 # 128000 is an arbitraty batch size number for processing
                 # each batch represents a collection of filtered IQ data
-                filtered_samples = self.filter_samples(iq_samples=iq_samples)
+                filtered_samples = self.filter_samples(iq_samples=np.array(iq_samples))
 
                 
                 logger.info("Extracting features from IQ samples")
@@ -328,33 +332,33 @@ class Baseline:
                 train_data = self.reshape_features(scaled_feature_arr)
 
 
-                # print('train data shape', train_data.shape)
+                print('train data shape', train_data.shape)
 
-                # # to what extent are feature arrays batched
-                # sequence_length = 10
+                # to what extent are feature arrays batched
+                sequence_length = 10
 
-                # # number of features in each component
-                # num_features = 9
+                # number of features in each component
+                num_features = 9
 
-                # latent_dim = 5
+                latent_dim = 5
 
-                # inputs = Input(shape=(sequence_length, num_features))
-                # encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
-                # decoded = RepeatVector(sequence_length)(encoded)
-                # decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
+                inputs = Input(shape=(sequence_length, num_features))
+                encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
+                decoded = RepeatVector(sequence_length)(encoded)
+                decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
 
-                # autoencoder = Model(inputs, decoded)
-                # autoencoder.compile(optimizer='adam', loss='mse')
+                autoencoder = Model(inputs, decoded)
+                autoencoder.compile(optimizer='adam', loss='mse')
 
-                autoencoder = load_model('autoencoder.keras')
+                # autoencoder = load_model('autoencoder.keras')
 
                 autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
 
-                autoencoder.save('autoencoder.keras')
+                autoencoder.save('autoencoder_light.keras')
 
 if __name__ == "__main__":
         async def main():
-                baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=500000)
+                baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000)
                 await baseline.train()
                 # iq_queue = asyncio.Queue(maxsize=1000000) 
                 # stop_event = asyncio.Event()
