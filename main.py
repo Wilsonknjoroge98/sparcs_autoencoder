@@ -346,16 +346,10 @@ class Baseline:
 
 if __name__ == "__main__":
         async def main():
-<<<<<<< HEAD
                 baseline = Baseline(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000)
                 await baseline.train()
-                # iq_queue = asyncio.Queue(maxsize=1000000) 
-                # stop_event = asyncio.Event()
-=======
-                baseline = Baseline(sdr_ip='192.168.3.157', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=7500)
                 iq_queue = asyncio.Queue(maxsize=1000000) 
                 stop_event = asyncio.Event()
->>>>>>> 35fa557ccd68d22e01250ee40f585389c1577730
 
                 producer_thread = asyncio.create_task(baseline.stream_samples(iq_queue, stop_event))
                 consumer_thread = asyncio.create_task(baseline.detect_anomalies(iq_queue, stop_event))
