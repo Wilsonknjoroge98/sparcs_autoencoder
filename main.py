@@ -73,8 +73,6 @@ class Utils:
         
                         # stack the processed data into a single array
                         flattened_data = np.hstack(processed_data)
-                        print('flattened data shape', flattened_data.shape)
-                        print('flattened data', flattened_data[:5])
 
                         window_size = 128000 
                         step_size = 64000 
@@ -228,7 +226,7 @@ class Test:
                                         break
 
                                 if len(data) != 1024:
-                                        # logger.warning(f"Received malformed sample of length: {len(data)}")
+                                        logger.warning(f"Received malformed sample of length: {len(data)}")
                                         continue 
 
                                 # interpret a buffer as a 1-dimensional array
@@ -241,10 +239,12 @@ class Test:
                         
                         self.stream.close()
                         await writer.wait_closed()
+                        print(iq_samples)
                         return iq_samples
                 except Exception as e:
                         error_message = f"Error while streaming from SDR: {str(e)}"
                         print(error_message)
+
         async def detect(self):         
                 iq_samples = await self.stream_samples()
 
@@ -283,15 +283,15 @@ class Test:
                 # shape (n_samples, 128000)
                 # 128000 is an arbitraty batch size number for processing
                 # each batch represents a collection of filtered IQ data
-                filtered_samples = self.filter_samples(iq_samples=np.array(iq_samples))
+                print(iq_samples)
+                filtered_samples = await self.utils.filter_samples(iq_samples=iq_samples)
 
-                
                 logger.info("Extracting features from IQ samples")
                 
                 feature_list = []
                 # extract 9 features from each batch of filtered IQ data
                 for filt_data in tqdm(filtered_samples):  
-                        features = self.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
+                        features = self.utils.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
                         feature_list.append(features)
                 
                 # shape (-1, 9)
@@ -303,7 +303,7 @@ class Test:
                 logger.info("Features extracted from IQ samples")
 
                 # shape (num_samples, sequence_length, num_features)
-                train_data = Utils.reshape_features(scaled_feature_arr)
+                train_data = self.utils.reshape_features(scaled_feature_arr)
 
 
                 print('train data shape', train_data.shape)
@@ -392,7 +392,7 @@ class Stream:
 
                                         if len(iq_samples) == self.num_samples:
                                                 await self.iq_queue.put(iq_samples)
-                                        print('queue size', self.iq_queue.qsize())
+                                        # print('queue size', self.iq_queue.qsize())
                 except Exception as e:
                         error_message = f"Error while streaming from SDR: {str(e)}"
                         print(error_message)
@@ -442,6 +442,7 @@ class Stream:
                         # return anomalies
                         except asyncio.TimeoutError:
                                 continue
+
         async def train(self):
                 while not self.stop_event.is_set():
                         try: 
@@ -450,7 +451,7 @@ class Stream:
                                 # shape (n_samples, 128000)
                                 # 128000 is an arbitraty batch size number for processing
                                 # each batch represents a collection of filtered IQ data
-                                filtered_samples = self.filter_samples(iq_samples=np.array(iq_samples))
+                                filtered_samples = await self.utils.filter_samples(iq_samples=iq_samples)
 
                                 
                                 logger.info("Extracting features from IQ samples")
@@ -458,7 +459,7 @@ class Stream:
                                 feature_list = []
                                 # extract 9 features from each batch of filtered IQ data
                                 for filt_data in tqdm(filtered_samples):  
-                                        features = self.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
+                                        features = self.utils.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
                                         feature_list.append(features)
                                 
                                 # shape (-1, 9)
@@ -470,7 +471,7 @@ class Stream:
                                 logger.info("Features extracted from IQ samples")
 
                                 # shape (num_samples, sequence_length, num_features)
-                                train_data = Utils.reshape_features(scaled_feature_arr)
+                                train_data = self.utils.reshape_features(scaled_feature_arr)
 
 
                                 # print('train data shape', train_data.shape)
@@ -491,9 +492,7 @@ class Stream:
                                 # autoencoder = Model(inputs, decoded)
                                 # autoencoder.compile(optimizer='adam', loss='mse')
 
-                                autoencoder = load_model('autoencoder.keras')
-
-                                autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
+                                self.utils.autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
 
                                 autoencoder.save('autoencoder_light.keras')
                         except asyncio.TimeoutError:
@@ -503,24 +502,23 @@ class Stream:
 
 if __name__ == "__main__":
         async def main():
+                logger.info('loading model')
                 autoencoder = load_model('autoencoder.keras')
 
                 iq_queue = asyncio.Queue(maxsize=100000) 
                 stop_event = asyncio.Event()
 
-                stream = Stream(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000, autoencoder=autoencoder, iq_queue=iq_queue, stop_event=stop_event)
+                stream = Stream(sdr_ip='192.168.3.157', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=20000, autoencoder=autoencoder, iq_queue=iq_queue, stop_event=stop_event)
+                # test = Test(sdr_ip='192.168.3.157', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000, autoencoder=autoencoder)
           
-
-
                 producer_task = asyncio.create_task(stream.stream_samples()) 
-                consumer_task = asyncio.create_task(stream.train())
+                consumer_tasks = [asyncio.create_task(stream.train()) for _ in range(10)]
                 
-
                 await asyncio.sleep(120)
 
                 stop_event.set()
                 await producer_task
-                await consumer_task
+                await asyncio.gather(*consumer_tasks)
                 
         asyncio.run(main())
 
