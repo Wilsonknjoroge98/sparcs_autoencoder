@@ -41,7 +41,7 @@ class Utils:
                         # how fast the SDR is sampling IQ data
                         sample_rate_hz = (soi_end_freq * 2) + 1
                         # set up filter coefficients for bandpass filter
-                        b, a = butter(4, Wn=[445000000, 446999999], fs=sample_rate_hz, btype='bandpass')
+                        # b, a = butter(4, Wn=[445000000, 446999999], fs=sample_rate_hz, btype='bandpass')
                         
                         processed_data = []
                         # loop through segments of iq samples
@@ -52,7 +52,7 @@ class Utils:
                                 data = sample - np.mean(np.abs(sample))
 
                                 # energy normalization
-                                data = data / np.sqrt(np.mean(np.abs(data)**2))
+                                # data = data / np.sqrt(np.mean(np.abs(data)**2))
 
                                 # array of sample timestamps
                                 t = np.arange(len(data)) / sample_rate_hz
@@ -66,10 +66,10 @@ class Utils:
                                 shifted_data = data * np.exp(1j*2*np.pi*frequency_shift_hz*t)
                         
                                 # filters out frequencies outside the spectrum of interest.
-                                filt_data = filtfilt(b, a, shifted_data)
+                                # filt_data = filtfilt(b, a, shifted_data)
 
 
-                                processed_data.append(filt_data)
+                                processed_data.append(shifted_data)
         
                         # stack the processed data into a single array
                         flattened_data = np.hstack(processed_data)
@@ -178,58 +178,7 @@ class Utils:
                 sound = AudioSegment.from_file(sound_file)
                 play(sound)
 
-        async def train(self):
-                iq_samples = await self.stream_samples()
 
-                # shape (n_samples, 128000)
-                # 128000 is an arbitraty batch size number for processing
-                # each batch represents a collection of filtered IQ data
-                filtered_samples = self.filter_samples(iq_samples=np.array(iq_samples))
-
-                
-                logger.info("Extracting features from IQ samples")
-                
-                feature_list = []
-                # extract 9 features from each batch of filtered IQ data
-                for filt_data in tqdm(filtered_samples):  
-                        features = self.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
-                        feature_list.append(features)
-                
-                # shape (-1, 9)
-                feature_arr = np.array(feature_list)
-
-                scaler = MinMaxScaler()
-                scaled_feature_arr = scaler.fit_transform(feature_arr)
-
-                logger.info("Features extracted from IQ samples")
-
-                # shape (num_samples, sequence_length, num_features)
-                train_data = Utils.reshape_features(scaled_feature_arr)
-
-
-                print('train data shape', train_data.shape)
-
-                # to what extent are feature arrays batched
-                sequence_length = 10
-
-                # number of features in each component
-                num_features = 9
-
-                latent_dim = 5
-
-                inputs = Input(shape=(sequence_length, num_features))
-                encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
-                decoded = RepeatVector(sequence_length)(encoded)
-                decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
-
-                autoencoder = Model(inputs, decoded)
-                autoencoder.compile(optimizer='adam', loss='mse')
-
-                # autoencoder = load_model('autoencoder.keras')
-
-                autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
-
-                autoencoder.save('autoencoder_light.keras')
 
 
 class Test:
@@ -296,7 +245,7 @@ class Test:
                 except Exception as e:
                         error_message = f"Error while streaming from SDR: {str(e)}"
                         print(error_message)
-        async def detect_anomalies(self):         
+        async def detect(self):         
                 iq_samples = await self.stream_samples()
 
                 # shape (n_samples, 128000)
@@ -328,10 +277,62 @@ class Test:
                 print('std', np.std(errors))
                 print('max', np.max(errors))
                 print('min', np.min(errors))
+        async def train(self):
+                iq_samples = await self.stream_samples()
+
+                # shape (n_samples, 128000)
+                # 128000 is an arbitraty batch size number for processing
+                # each batch represents a collection of filtered IQ data
+                filtered_samples = self.filter_samples(iq_samples=np.array(iq_samples))
+
+                
+                logger.info("Extracting features from IQ samples")
+                
+                feature_list = []
+                # extract 9 features from each batch of filtered IQ data
+                for filt_data in tqdm(filtered_samples):  
+                        features = self.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
+                        feature_list.append(features)
+                
+                # shape (-1, 9)
+                feature_arr = np.array(feature_list)
+
+                scaler = MinMaxScaler()
+                scaled_feature_arr = scaler.fit_transform(feature_arr)
+
+                logger.info("Features extracted from IQ samples")
+
+                # shape (num_samples, sequence_length, num_features)
+                train_data = Utils.reshape_features(scaled_feature_arr)
 
 
-class Detect:
-        def __init__(self, sdr_ip, sdr_port, sdr_freq, sdr_sample_rate, sdr_gain, num_samples, autoencoder):
+                print('train data shape', train_data.shape)
+
+                # to what extent are feature arrays batched
+                sequence_length = 10
+
+                # number of features in each component
+                num_features = 9
+
+                latent_dim = 5
+
+                inputs = Input(shape=(sequence_length, num_features))
+                encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
+                decoded = RepeatVector(sequence_length)(encoded)
+                decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
+
+                autoencoder = Model(inputs, decoded)
+                autoencoder.compile(optimizer='adam', loss='mse')
+
+                # autoencoder = load_model('autoencoder.keras')
+
+                autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
+
+                autoencoder.save('autoencoder_light.keras')
+
+
+class Stream:
+        def __init__(self, sdr_ip, sdr_port, sdr_freq, sdr_sample_rate, sdr_gain, num_samples, autoencoder, iq_queue, stop_event):
             self.sdr_ip = sdr_ip
             self.sdr_port = sdr_port
             self.sdr_freq = sdr_freq
@@ -340,9 +341,11 @@ class Detect:
             self.num_samples = num_samples
             self.stream = None
             self.utils = Utils(autoencoder=autoencoder)
+            self.iq_queue = iq_queue
+            self.stop_event = stop_event
 
 
-        async def stream_samples(self, iq_queue: asyncio.Queue, stop_event):
+        async def stream_samples(self):
                 """
                 Open an SDR device from IP and port numbers. While a "streaming task" is active, collect IQ data
                 from raw uint8 data from the SDR data socket stream.
@@ -368,7 +371,7 @@ class Detect:
 
                         logger.info("Starting to stream IQ samples")
                         await asyncio.sleep(2)
-                        while not stop_event.is_set():
+                        while not self.stop_event.is_set():
                                 iq_samples = []
                                 while len(iq_samples) < self.num_samples:
                                         # read raw data from sdr up to 1024 bytes
@@ -388,17 +391,17 @@ class Detect:
                                         iq_samples.append(raw_data)
 
                                         if len(iq_samples) == self.num_samples:
-                                                await iq_queue.put(iq_samples)
-                                        print('queue size', iq_queue.qsize())
+                                                await self.iq_queue.put(iq_samples)
+                                        print('queue size', self.iq_queue.qsize())
                 except Exception as e:
                         error_message = f"Error while streaming from SDR: {str(e)}"
                         print(error_message)
 
-        async def detect_anomalies(self, iq_queue, stop_event):
-                while not stop_event.is_set():
+        async def detect(self):
+                while not self.stop_event.is_set():
                         try:           
                                 # iq_samples = await self.stream_samples()
-                                iq_samples = await iq_queue.get()
+                                iq_samples = await self.iq_queue.get()
 
                                 # shape (n_samples, 128000)
                                 # 128000 is an arbitraty batch size number for processing
@@ -439,6 +442,62 @@ class Detect:
                         # return anomalies
                         except asyncio.TimeoutError:
                                 continue
+        async def train(self):
+                while not self.stop_event.is_set():
+                        try: 
+                                iq_samples = await self.iq_queue.get()
+
+                                # shape (n_samples, 128000)
+                                # 128000 is an arbitraty batch size number for processing
+                                # each batch represents a collection of filtered IQ data
+                                filtered_samples = self.filter_samples(iq_samples=np.array(iq_samples))
+
+                                
+                                logger.info("Extracting features from IQ samples")
+                                
+                                feature_list = []
+                                # extract 9 features from each batch of filtered IQ data
+                                for filt_data in tqdm(filtered_samples):  
+                                        features = self.extract_features(filtered_data=filt_data, sample_rate_hz=2048000)
+                                        feature_list.append(features)
+                                
+                                # shape (-1, 9)
+                                feature_arr = np.array(feature_list)
+
+                                scaler = MinMaxScaler()
+                                scaled_feature_arr = scaler.fit_transform(feature_arr)
+
+                                logger.info("Features extracted from IQ samples")
+
+                                # shape (num_samples, sequence_length, num_features)
+                                train_data = Utils.reshape_features(scaled_feature_arr)
+
+
+                                # print('train data shape', train_data.shape)
+
+                                # # to what extent are feature arrays batched
+                                # sequence_length = 10
+
+                                # # number of features in each component
+                                # num_features = 9
+
+                                # latent_dim = 5
+
+                                # inputs = Input(shape=(sequence_length, num_features))
+                                # encoded = LSTM(latent_dim, activation='relu', return_sequences=False)(inputs)
+                                # decoded = RepeatVector(sequence_length)(encoded)
+                                # decoded = LSTM(num_features, activation='linear', return_sequences=True)(decoded)
+
+                                # autoencoder = Model(inputs, decoded)
+                                # autoencoder.compile(optimizer='adam', loss='mse')
+
+                                autoencoder = load_model('autoencoder.keras')
+
+                                autoencoder.fit(train_data, train_data, epochs=50, batch_size=32, validation_split=0.1)
+
+                                autoencoder.save('autoencoder_light.keras')
+                        except asyncio.TimeoutError:
+                                continue
                 
 
 
@@ -446,20 +505,22 @@ if __name__ == "__main__":
         async def main():
                 autoencoder = load_model('autoencoder.keras')
 
-                detect = Detect(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000, autoencoder=autoencoder)
                 iq_queue = asyncio.Queue(maxsize=100000) 
                 stop_event = asyncio.Event()
 
-                
+                stream = Stream(sdr_ip='192.168.0.165', sdr_port=1234, sdr_freq=446000000, sdr_sample_rate=2048000, sdr_gain=10, num_samples=10000, autoencoder=autoencoder, iq_queue=iq_queue, stop_event=stop_event)
+          
 
-                producer_tasks = [asyncio.create_task(detect.stream_samples(iq_queue, stop_event)) for _ in range(3)]
-                consumer_tasks = [asyncio.create_task(detect.detect_anomalies(iq_queue, stop_event)) for _ in range(10)]
+
+                producer_task = asyncio.create_task(stream.stream_samples()) 
+                consumer_task = asyncio.create_task(stream.train())
                 
 
                 await asyncio.sleep(120)
 
                 stop_event.set()
-                await asyncio.gather(*producer_tasks, *consumer_tasks)
+                await producer_task
+                await consumer_task
                 
         asyncio.run(main())
 
